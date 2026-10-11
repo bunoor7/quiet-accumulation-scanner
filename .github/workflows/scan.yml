@@ -1,0 +1,38 @@
+name: Scan and notify Telegram
+
+# Every 4 hours, a few minutes after each 4h candle closes (00, 04, 08,
+# 12, 16, 20 UTC = 03, 07, 11, 15, 19, 23 Bahrain time). Only a real
+# signal is posted to Telegram; a no-signal run stays silent there.
+on:
+  schedule:
+    - cron: "7 0,4,8,12,16,20 * * *"
+  workflow_dispatch:
+    inputs:
+      test_message:
+        description: "Send a test message to Telegram instead of scanning"
+        type: boolean
+        default: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # api.binance.com refuses US-hosted runners; this is Binance's own
+      # public market-data mirror with the same endpoints.
+      BINANCE_BASE_URL: https://data-api.binance.vision
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Telegram test message
+        if: ${{ inputs.test_message }}
+        run: python -m accscan.cli --telegram-test
+      - name: Scan Binance and post any signal
+        if: ${{ !inputs.test_message }}
+        run: python -m accscan.cli --exchange binance --telegram -v

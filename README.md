@@ -109,6 +109,24 @@ Output is Arabic, in the same two shapes the original methodology uses:
 a single short "no signal" line most of the time, or a full seven-section
 report on the rare run where a real signal clears every gate.
 
+## Telegram alerts
+
+`.github/workflows/scan.yml` runs the scan on GitHub Actions every 4 hours,
+a few minutes after each 4h candle closes, and posts **only real signals**
+to a Telegram channel. Setup:
+
+1. Create a bot with @BotFather and copy its token.
+2. Create a channel and add the bot as an administrator.
+3. In the repository, Settings > Secrets and variables > Actions, add
+   `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (e.g. `@your_channel`).
+4. Actions > "Scan and notify Telegram" > Run workflow, ticking
+   "Send a test message", to confirm the bot can post.
+
+Locally: `python -m accscan.cli --telegram` with both variables exported,
+or `--telegram-test` to check the setup. Because Actions runners are
+US-hosted and `api.binance.com` refuses them, the workflow points the
+Binance adapter at Binance's public mirror via `BINANCE_BASE_URL`.
+
 ## Market cap
 
 Binance and OKX's public endpoints expose price and volume, not

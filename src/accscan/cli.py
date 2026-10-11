@@ -19,6 +19,7 @@ from .report import format_no_signal, format_signal_report
 from .screener import build_universe, score_candidates, shortlist_accumulation_candidates
 from .signal_engine import evaluate_candidate, rank_signals
 from .trade_plan import build_trade_plan_with_reason
+from . import telegram
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -37,8 +38,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "CoinGecko's free /coins/markets endpoint to enforce it for real.",
     )
     p.add_argument("--decision-timeframe", default="4h", choices=["1h", "4h", "1D"])
+    p.add_argument(
+        "--telegram", action="store_true",
+        help="Also post a real signal to Telegram (needs TELEGRAM_BOT_TOKEN and "
+             "TELEGRAM_CHAT_ID). No-signal runs stay silent on Telegram.",
+    )
+    p.add_argument(
+        "--telegram-test", action="store_true",
+        help="Send one test message to Telegram and exit, to verify the setup.",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
+
+
+def _emit(text: str, is_signal: bool, args) -> int:
+    """Print the result; on a real signal also post it to Telegram if asked."""
+    print(text)
+    if is_signal and args.telegram:
+        try:
+            telegram.send_message("🔔 إشارة تراكم هادئ\n\n" + text)
+        except (telegram.TelegramConfigError, telegram.TelegramSendError) as exc:
+            print(f"تعذر الإرسال إلى تيليغرام ({exc})", file=sys.stderr)
+            return 2
+    return 0
 
 
 def run(argv=None) -> int:
@@ -48,6 +70,18 @@ def run(argv=None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     log = logging.getLogger("accscan.cli")
+
+    if args.telegram_test:
+        try:
+            telegram.send_message(
+                "✅ تم ربط ماسح التراكم الهادئ بهذه القناة بنجاح. "
+                "ستصل الإشارات هنا فقط عند ظهور فرصة حقيقية."
+            )
+        except (telegram.TelegramConfigError, telegram.TelegramSendError) as exc:
+            print(f"فشل اختبار تيليغرام ({exc})")
+            return 2
+        print("تم إرسال رسالة الاختبار إلى تيليغرام بنجاح")
+        return 0
 
     cfg = ScreenConfig()  # USDT pairs only, enforced in ScreenConfig
     client = get_exchange_client(
@@ -130,8 +164,7 @@ def run(argv=None) -> int:
         print(format_no_signal(f"ظهرت إشارة فنية لكن لا توجد صفقة مجدية، {plan_reason}"))
         return 0
 
-    print(format_signal_report(args.exchange, market_timing, best, trade_plan))
-    return 0
+    return _emit(format_signal_report(args.exchange, market_timing, best, trade_plan), True, args)
 
 
 if __name__ == "__main__":

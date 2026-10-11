@@ -9,6 +9,7 @@ https://developers.binance.com/docs/binance-spot-api-docs):
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Dict, List
 
@@ -17,7 +18,10 @@ import pandas as pd
 from .base import ExchangeClient, Ticker24h
 from ._http import get_json
 
-BASE_URL = "https://api.binance.com"
+# Override with BINANCE_BASE_URL. GitHub Actions runners sit in the US,
+# where api.binance.com answers 451; Binance's public market-data mirror
+# https://data-api.binance.vision serves the same three endpoints there.
+BASE_URL = os.environ.get("BINANCE_BASE_URL", "https://api.binance.com").rstrip("/")
 
 # This project's own interval vocabulary -> Binance's native kline interval.
 _INTERVAL_MAP = {
