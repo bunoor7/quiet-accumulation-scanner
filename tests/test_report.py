@@ -87,6 +87,9 @@ def test_format_signal_report_contains_all_seven_sections_and_no_signal_disclaim
         assert marker in report
     assert "ETHFI" in report
     assert "نصيحة مالية" in report  # the honesty-gate disclaimer must always be present
+    # Conviction is rendered in Arabic, never as the raw English key.
+    assert not any(w in report for w in ("high", "medium", "low"))
+    assert any(w in report for w in ("مرتفعة", "متوسطة", "منخفضة"))
 
 
 def test_format_signal_report_handles_missing_trade_plan_gracefully():

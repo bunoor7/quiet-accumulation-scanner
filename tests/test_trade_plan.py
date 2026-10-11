@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from accscan.config import ScreenConfig
-from accscan.trade_plan import build_trade_plan, find_swing_levels
+from accscan.trade_plan import build_trade_plan, build_trade_plan_with_reason, find_swing_levels
 
 
 def _df_with_pivots(closes, atr: float = 1.0):
@@ -42,7 +42,9 @@ def test_build_trade_plan_prefers_structure_stop_when_tighter():
               102, 103, 104, 105, 106, 107, 108, 109, 110, 109, 108, 107,
               106, 105, 104, 103, 102]
     df = _df_with_pivots(closes, atr=5.0)
-    cfg = ScreenConfig()
+    # The nearest resistance (110) pays only ~1.13R here; this test is about
+    # stop selection, so relax the R:R floor to keep the plan alive.
+    cfg = ScreenConfig(min_reward_risk=1.0)
     plan = build_trade_plan("ETHFIUSDT", df, cfg, conviction="medium")
 
     assert plan is not None
@@ -110,3 +112,30 @@ def test_build_trade_plan_reward_risk_matches_two_targets():
     assert risk > 0
     for target, rr in zip(plan.targets, plan.reward_risk):
         assert rr == pytest.approx((target - plan.entry) / risk)
+
+
+def test_structure_stop_hugging_entry_is_skipped_for_a_deeper_support():
+    # Two supports: 95 (far) and 101.9 (0.1 below entry 102). With ATR 2,
+    # 101.9 sits inside one ATR of entry -> noise, must be skipped. 95 is
+    # 7 below entry, beyond the 1.5 ATR stop (99) -> the ATR stop wins.
+    closes = ([105, 104, 103, 102, 101, 100, 99, 98, 95, 98, 99, 100, 101, 102,
+               103, 104, 105, 106, 107, 108, 120, 108, 107, 106, 105, 104, 103,
+               102, 101.9, 102.5, 103, 103.5, 104, 104.5, 102])
+    df = _df_with_pivots(closes, atr=2.0)
+    cfg = ScreenConfig()
+    plan = build_trade_plan("ETHFIUSDT", df, cfg, conviction="medium")
+    assert plan is not None
+    assert plan.stop_basis == "atr"
+    assert plan.stop == pytest.approx(102.0 - 1.5 * 2.0)
+    assert plan.entry - plan.stop >= cfg.min_stop_atr_multiple * 2.0
+
+
+def test_trade_rejected_when_nearest_resistance_pays_too_little():
+    # Resistance at 103 is only 1 above entry 102 while risk is 3 (ATR stop)
+    # -> 0.33R, under the 1.5R floor. No plan, with an Arabic reason.
+    closes = [100, 100.5, 101, 101.5, 102, 103, 102, 101.5, 101, 100.5, 101, 101.5, 102]
+    df = _df_with_pivots(closes, atr=2.0)
+    cfg = ScreenConfig()
+    plan, reason = build_trade_plan_with_reason("ETHFIUSDT", df, cfg, conviction="low")
+    assert plan is None
+    assert "103" in reason

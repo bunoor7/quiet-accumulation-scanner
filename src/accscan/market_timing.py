@@ -20,7 +20,7 @@ from .exchanges.base import ExchangeClient, MarketSnapshot
 class MarketRegime(str, Enum):
     SHARP_TREND = "sharp_trend"       # abs(weighted 24h change) > threshold
     ACTIVE_RANGE = "active_range"     # moderate activity, no sharp direction
-    QUIET_LOW_LIQUIDITY = "quiet_low_liquidity"
+    QUIET = "quiet"                   # abs(weighted 24h change) < quiet threshold
 
 
 @dataclass(frozen=True)
@@ -31,15 +31,15 @@ class MarketTimingResult:
 
 
 def assess_market_timing(client: ExchangeClient, cfg: ScreenConfig) -> MarketTimingResult:
-    snapshot = client.get_market_wide_snapshot(quote_asset=cfg.quote_asset)
+    snapshot = client.get_market_wide_snapshot(
+        quote_asset=cfg.quote_asset, exclude_bases=cfg.known_stable_bases,
+    )
     change = snapshot.volume_weighted_change_pct_24h
 
     if abs(change) > cfg.sharp_market_move_pct:
         regime = MarketRegime.SHARP_TREND
-    elif abs(change) < 0.5 and snapshot.total_quote_volume_24h <= 0:
-        # Defensive branch; total_quote_volume_24h is validated > 0 upstream,
-        # kept here so a future refactor that relaxes that check stays safe.
-        regime = MarketRegime.QUIET_LOW_LIQUIDITY
+    elif abs(change) < cfg.quiet_market_move_pct:
+        regime = MarketRegime.QUIET
     else:
         regime = MarketRegime.ACTIVE_RANGE
 

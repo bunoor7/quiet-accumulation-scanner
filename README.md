@@ -3,7 +3,8 @@
 A read-only screener that looks for liquid altcoins sitting in a genuine
 **quiet accumulation** phase with an early breakout trigger, reading live
 market data directly from **Binance's** or **OKX's public spot REST
-endpoints** — no API key, no authenticated trading, no order placement.
+endpoints**. Every pair scanned is quoted in **USDT only**; this is
+enforced in `ScreenConfig` and is not configurable — no API key, no authenticated trading, no order placement.
 Every number is computed locally in Python; nothing is bought, sold, or
 staked by this project.
 
@@ -21,7 +22,9 @@ is incomplete or ambiguous, the tool reports **no signal**, not a weak one.
 1. **Market timing.** Is the market as a whole quiet, actively ranging, or
    in a sharp directional move? This uses a volume-weighted average 24h
    change across every pair on the chosen exchange, plus BTC's share of
-   quote volume as a liquidity-weighted dominance proxy — honestly labeled
+   quote volume as a liquidity-weighted dominance proxy. Stablecoin
+   pairs (USDC, FDUSD...) are excluded from this average so their huge,
+   flat volume cannot hide a genuinely sharp market — honestly labeled
    as an *exchange-liquidity proxy*, never as "market cap", since it isn't
    built from real circulating-supply data the way CoinGecko's figure is.
 2. **Universe and accumulation shortlist.** Filter out majors (BTC, ETH,
@@ -47,14 +50,25 @@ is incomplete or ambiguous, the tool reports **no signal**, not a weak one.
    it is the noisiest of the four on altcoins — but it is never enough on
    its own.
 6. **Trade plan.** Only built for a confirmed signal: a stop from whichever
-   of (ATR multiple, nearest real swing support) is tighter and still
-   protective, one or two resistance-based targets (or a measured-move
+   of (1.5 ATR, nearest swing support that is at least 1 ATR below entry)
+   is tighter, so a support hugging the entry never produces a noise-level
+   stop or an inflated reward:risk. If the nearest resistance pays less
+   than 1.5R the signal is dropped and the next-strongest signal is tried; one or two resistance-based targets (or a measured-move
    fallback when no resistance is visible in the fetched window), and each
    target's reward:risk ratio.
 7. **Honesty gate.** If nothing across the whole shortlist clears both the
    compression and trigger bars, the tool prints a single short line and
    stops — it never pads out a report around a borderline case. Silence is
    the correct behavior here, not a failure of the screen.
+
+## Closed candles only
+
+Both exchanges return the still-forming candle as the latest bar. The
+adapters drop it (Binance by `close_time`, OKX by its `confirm` flag), so
+every indicator and every decision runs on closed bars and a signal can
+never appear mid-candle and vanish at the close. OKX daily bars use the
+UTC-aligned `1Dutc` interval to match Binance's day boundaries, and OKX
+volume is read in base currency, the same unit as Binance.
 
 ## Installation
 

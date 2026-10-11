@@ -17,17 +17,16 @@ from .market_timing import assess_market_timing
 from .multi_timeframe import confirm_candidates, surviving
 from .report import format_no_signal, format_signal_report
 from .screener import build_universe, score_candidates, shortlist_accumulation_candidates
-from .signal_engine import evaluate_candidate, pick_best_signal
-from .trade_plan import build_trade_plan
+from .signal_engine import evaluate_candidate, rank_signals
+from .trade_plan import build_trade_plan_with_reason
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="accscan",
-        description="Quiet-accumulation screener for liquid altcoins, read directly from Binance or OKX.",
+        description="Quiet-accumulation screener for liquid altcoins quoted in USDT, read directly from Binance or OKX.",
     )
     p.add_argument("--exchange", choices=["binance", "okx"], default="binance")
-    p.add_argument("--quote", default="USDT", help="Quote asset to scan against (default USDT)")
     p.add_argument(
         "--market-cap",
         choices=["none", "coingecko"],
@@ -50,7 +49,7 @@ def run(argv=None) -> int:
     )
     log = logging.getLogger("accscan.cli")
 
-    cfg = ScreenConfig(quote_asset=args.quote)
+    cfg = ScreenConfig()  # USDT pairs only, enforced in ScreenConfig
     client = get_exchange_client(
         args.exchange,
         timeout_s=cfg.http_timeout_s,
@@ -106,16 +105,30 @@ def run(argv=None) -> int:
             log.info("no signal for %s: %s", v.confirmed.candidate.symbol, v.reject_reason)
 
     # Step 7 (honesty gate)
-    best = pick_best_signal(verdicts)
-    if best is None:
+    ranked = rank_signals(verdicts)
+    if not ranked:
         print(format_no_signal("لا توجد عملة تجمع بين تراكم هادئ حقيقي وزناد مبكر موثوق في هذا التشغيل"))
         return 0
 
-    # Step 6
-    decision_df = best.confirmed.reads[args.decision_timeframe].df
-    trade_plan = build_trade_plan(
-        best.confirmed.candidate.symbol, decision_df, cfg, conviction=best.conviction or "low"
-    )
+    # Step 6: walk the signals strongest-first and report the first one
+    # that also yields a tradeable plan (sane stop, enough reward:risk).
+    best = trade_plan = None
+    plan_reason = None
+    for verdict in ranked:
+        decision_df = verdict.confirmed.reads[args.decision_timeframe].df
+        plan, reason = build_trade_plan_with_reason(
+            verdict.confirmed.candidate.symbol, decision_df, cfg,
+            conviction=verdict.conviction or "low",
+        )
+        if plan is not None:
+            best, trade_plan = verdict, plan
+            break
+        plan_reason = plan_reason or reason
+        log.info("signal %s dropped at trade plan: %s", verdict.confirmed.candidate.symbol, reason)
+
+    if best is None:
+        print(format_no_signal(f"ظهرت إشارة فنية لكن لا توجد صفقة مجدية، {plan_reason}"))
+        return 0
 
     print(format_signal_report(args.exchange, market_timing, best, trade_plan))
     return 0

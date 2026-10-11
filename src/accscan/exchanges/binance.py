@@ -9,6 +9,7 @@ https://developers.binance.com/docs/binance-spot-api-docs):
 """
 from __future__ import annotations
 
+import time
 from typing import Dict, List
 
 import pandas as pd
@@ -25,6 +26,11 @@ _INTERVAL_MAP = {
     "1D": "1d",
     "1W": "1w",
 }
+
+
+def _now_ms() -> int:
+    """Current UTC time in ms. A function (not inline) so tests can pin it."""
+    return int(time.time() * 1000)
 
 
 class BinanceClient(ExchangeClient):
@@ -112,6 +118,13 @@ class BinanceClient(ExchangeClient):
                 "taker_base_vol", "taker_quote_vol", "ignore",
             ],
         )
+        # Binance always returns the still-forming candle as the last row.
+        # Its close_time lies in the future; every indicator and decision
+        # must run on closed bars only, otherwise a signal can appear
+        # mid-candle and vanish at the close.
+        df = df[df["close_time"].astype("int64") < _now_ms()]
+        if df.empty:
+            raise RuntimeError(f"binance: no closed klines for {symbol} {interval}")
         df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
         for col in ("open", "high", "low", "close", "volume"):
             df[col] = df[col].astype(float)

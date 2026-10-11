@@ -246,3 +246,64 @@ def test_okx_get_klines_reverses_newest_first_order_and_renames_volume(monkeypat
 def test_okx_normalize_symbol():
     client = OKXClient()
     assert client.normalize_symbol("ethfi", "usdt") == "ETHFI-USDT"
+
+
+# --- Closed-candle handling and volume units ------------------------------
+
+def test_binance_get_klines_drops_the_still_forming_candle(monkeypatch):
+    base = 1_700_000_000_000
+    rows = [_binance_kline_row(base + i * 3_600_000, 10, 11, 9, 10 + i, 100) for i in range(4)]
+    # "now" sits inside the last bar -> its close_time is in the future.
+    monkeypatch.setattr(binance_mod, "_now_ms", lambda: base + 2 * 3_600_000 + 1)
+    monkeypatch.setattr(binance_mod, "get_json", lambda *a, **k: rows)
+    df = BinanceClient().get_klines("ETHFIUSDT", "1h")
+    assert len(df) == 3
+    assert df["close"].iloc[-1] == pytest.approx(12.0)
+
+
+def test_okx_get_klines_drops_unconfirmed_candle_and_uses_base_volume(monkeypatch):
+    payload = {
+        "code": "0", "msg": "",
+        "data": [
+            ["1700007200000", "12", "13", "11", "12.5", "7", "1200", "0", "0"],  # forming
+            ["1700003600000", "11", "12", "10", "11.5", "6", "1100", "0", "1"],
+            ["1700000000000", "10", "11", "9", "10.5", "5", "1000", "0", "1"],
+        ],
+    }
+    monkeypatch.setattr(okx_mod, "get_json", lambda *a, **k: payload)
+    df = OKXClient().get_klines("ETHFI-USDT", "1h")
+    assert len(df) == 2
+    assert df["close"].iloc[-1] == pytest.approx(11.5)
+    assert list(df["volume"]) == [pytest.approx(5.0), pytest.approx(6.0)]
+
+
+def test_okx_daily_bars_are_utc_aligned(monkeypatch):
+    seen = {}
+
+    def fake_get_json(url, params=None, **kwargs):
+        seen.update(params)
+        return {"code": "0", "msg": "", "data": [["1700000000000", "1", "1", "1", "1", "1", "1", "0", "1"]]}
+
+    monkeypatch.setattr(okx_mod, "get_json", fake_get_json)
+    OKXClient().get_klines("ETHFI-USDT", "1D")
+    assert seen["bar"] == "1Dutc"
+
+
+def test_market_wide_snapshot_excludes_stablecoin_pairs(monkeypatch):
+    info = {"symbols": _BINANCE_EXCHANGE_INFO["symbols"] + [
+        {"symbol": "USDCUSDT", "status": "TRADING", "baseAsset": "USDC", "quoteAsset": "USDT"},
+    ]}
+    tickers = _BINANCE_TICKERS_24H + [
+        {"symbol": "USDCUSDT", "lastPrice": "1.0", "priceChangePercent": "0.0", "quoteVolume": "5000000000.0"},
+    ]
+
+    def fake_get_json(url, params=None, **kwargs):
+        return info if url.endswith("/api/v3/exchangeInfo") else tickers
+
+    monkeypatch.setattr(binance_mod, "get_json", fake_get_json)
+    snap = BinanceClient().get_market_wide_snapshot("USDT", exclude_bases=["USDC"])
+    total = 900_000_000.0 + 36_000_000.0
+    assert snap.pair_count == 2
+    assert snap.volume_weighted_change_pct_24h == pytest.approx(
+        (1.5 * 900_000_000.0 + (-0.8) * 36_000_000.0) / total
+    )

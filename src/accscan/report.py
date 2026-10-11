@@ -19,8 +19,10 @@ from .trade_plan import TradePlan
 _REGIME_AR = {
     MarketRegime.SHARP_TREND: "حركة اتجاهية حادة على مستوى السوق ككل",
     MarketRegime.ACTIVE_RANGE: "نشاط معتدل يصلح لرصد التراكم",
-    MarketRegime.QUIET_LOW_LIQUIDITY: "هدوء منخفض السيولة",
+    MarketRegime.QUIET: "هدوء نسبي",
 }
+
+_CONVICTION_AR = {"high": "مرتفعة", "medium": "متوسطة", "low": "منخفضة"}
 
 _TREND_AR = {True: "صاعد", False: "هابط"}
 
@@ -90,7 +92,7 @@ def format_signal_report(
     lines.append("خامسا، إشارة الدخول.")
     trig = verdict.trigger
     lines.append(
-        f"الإشارة قائمة الآن بدرجة قناعة {verdict.conviction}، "
+        f"الإشارة قائمة الآن بدرجة قناعة {_CONVICTION_AR.get(verdict.conviction or 'low', 'منخفضة')}، "
         f"بسبب {('، '.join(trig.reasons) if trig.reasons else 'تأكيد مباشر من الأطر الزمنية')}."
     )
     lines.append("")

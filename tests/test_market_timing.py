@@ -79,3 +79,32 @@ def test_raises_when_exchange_returns_no_tickers():
     client = _FakeClient([])
     with pytest.raises(RuntimeError):
         assess_market_timing(client, cfg)
+
+
+def test_quiet_regime_when_market_barely_moves():
+    cfg = ScreenConfig()
+    client = _FakeClient([
+        _ticker("BTCUSDT", "BTC", change_pct=0.2, volume=1_000_000_000.0),
+        _ticker("ETHFIUSDT", "ETHFI", change_pct=-0.1, volume=30_000_000.0),
+    ])
+    result = assess_market_timing(client, cfg)
+    assert result.regime is MarketRegime.QUIET
+    assert result.strict_mode is False
+
+
+def test_stablecoin_volume_no_longer_masks_a_sharp_market():
+    # Alts +6% but a giant ~0% USDC pair: previously diluted to ~1.6%.
+    cfg = ScreenConfig()
+    client = _FakeClient([
+        _ticker("BTCUSDT", "BTC", change_pct=6.0, volume=1_000_000_000.0),
+        _ticker("USDCUSDT", "USDC", change_pct=0.0, volume=3_000_000_000.0),
+    ])
+    result = assess_market_timing(client, cfg)
+    assert result.regime is MarketRegime.SHARP_TREND
+
+
+def test_config_only_accepts_usdt_quote():
+    assert ScreenConfig().quote_asset == "USDT"
+    assert ScreenConfig(quote_asset="usdt").quote_asset == "USDT"
+    with pytest.raises(ValueError):
+        ScreenConfig(quote_asset="USDC")

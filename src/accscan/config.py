@@ -9,11 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
+# Every pair this project scans, and every market-wide statistic it
+# computes, is quoted against USDT. This is a fixed design decision, not
+# a tunable: ScreenConfig refuses any other quote asset.
+QUOTE_ASSET = "USDT"
+
 
 @dataclass
 class ScreenConfig:
     # --- Universe filters (step 2) ---
-    quote_asset: str = "USDT"
+    quote_asset: str = QUOTE_ASSET
     min_24h_quote_volume_usd: float = 15_000_000.0
     min_market_cap_usd: float = 150_000_000.0  # only enforced if a market-cap
     #                                            provider is configured; see
@@ -30,6 +35,8 @@ class ScreenConfig:
         default_factory=lambda: [
             "USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDP", "USD1", "USDE",
             "PYUSD", "USDD", "GUSD", "EURT", "EURS", "XAUT", "PAXG",
+            "BUSD", "USDS", "RLUSD", "BFUSD", "XUSD", "USDG", "EUR", "EURI",
+            "AEUR",
         ]
     )
     stable_price_range_pct: float = 1.5  # 90d (high-low)/low below this % -> treat as pegged, drop
@@ -47,6 +54,8 @@ class ScreenConfig:
     # --- Market-wide regime gate (step 1) ---
     sharp_market_move_pct: float = 4.0  # abs 24h market-wide move beyond this
     #                                     triggers stricter acceptance below.
+    quiet_market_move_pct: float = 0.5  # abs 24h market-wide move below this
+    #                                     -> regime "quiet".
     strict_rsi_band: tuple = (48.0, 56.0)  # used instead of rsi_band when the
     #                                        market-wide move is sharp.
 
@@ -74,10 +83,23 @@ class ScreenConfig:
 
     # --- Trade plan (step 6) ---
     atr_stop_multiple: float = 1.5
-    min_reward_risk: float = 1.5
+    min_stop_atr_multiple: float = 1.0  # a structure stop closer to entry
+    #                                     than this many ATRs sits inside
+    #                                     normal noise and is skipped in
+    #                                     favour of a deeper support or the
+    #                                     ATR stop.
+    min_reward_risk: float = 1.5  # nearest target below this R:R -> no trade
 
     # --- Data freshness / retry policy ---
     http_timeout_s: float = 10.0
     http_retries: int = 3
     http_retry_wait_s: float = 2.0
     klines_limit: int = 240  # bars fetched per timeframe
+
+    def __post_init__(self) -> None:
+        if self.quote_asset.upper() != QUOTE_ASSET:
+            raise ValueError(
+                f"quote_asset must be {QUOTE_ASSET}; this scanner only "
+                f"trades {QUOTE_ASSET} pairs (got {self.quote_asset!r})"
+            )
+        self.quote_asset = QUOTE_ASSET

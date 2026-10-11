@@ -209,15 +209,21 @@ def evaluate_candidate(
     )
 
 
+_CONVICTION_RANK = {"high": 2, "medium": 1, "low": 0}
+
+
+def rank_signals(verdicts: List[SignalVerdict]) -> List[SignalVerdict]:
+    """Every genuine signal, strongest conviction first (stable order)."""
+    signals = [v for v in verdicts if v.is_signal]
+    signals.sort(key=lambda v: _CONVICTION_RANK.get(v.conviction or "low", 0), reverse=True)
+    return signals
+
+
 def pick_best_signal(verdicts: List[SignalVerdict]) -> Optional[SignalVerdict]:
     """Step 7's honesty gate lives here as much as in evaluate_candidate:
 
     if nothing qualifies, this returns None and the caller must emit the
     terse "no signal" line -- never the full report format.
     """
-    signals = [v for v in verdicts if v.is_signal]
-    if not signals:
-        return None
-    rank = {"high": 2, "medium": 1, "low": 0}
-    signals.sort(key=lambda v: rank.get(v.conviction or "low", 0), reverse=True)
-    return signals[0]
+    ranked = rank_signals(verdicts)
+    return ranked[0] if ranked else None

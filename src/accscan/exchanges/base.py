@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import pandas as pd
 
@@ -53,7 +53,11 @@ class ExchangeClient(ABC):
     def normalize_symbol(self, base_asset: str, quote_asset: str = "USDT") -> str:
         """Build this exchange's native symbol string for a base/quote pair."""
 
-    def get_market_wide_snapshot(self, quote_asset: str = "USDT") -> "MarketSnapshot":
+    def get_market_wide_snapshot(
+        self,
+        quote_asset: str = "USDT",
+        exclude_bases: Iterable[str] = (),
+    ) -> "MarketSnapshot":
         """Aggregate step-1 "market timing" stats from the tickers endpoint.
 
         This is a liquidity-weighted proxy for total-market-cap change and
@@ -64,7 +68,14 @@ class ExchangeClient(ABC):
         the report layer, since it is not the same metric -- see
         ``market_timing.py`` for the honest framing.
         """
-        tickers = self.get_tickers_24h(quote_asset=quote_asset)
+        excluded = {b.upper() for b in exclude_bases}
+        # Stablecoin pairs (USDC/USDT, FDUSD/USDT...) carry huge volume and
+        # ~0% change; left in, they dilute the weighted move and hide a
+        # genuinely sharp market from the regime gate.
+        tickers = [
+            t for t in self.get_tickers_24h(quote_asset=quote_asset)
+            if t.base_asset.upper() not in excluded
+        ]
         if not tickers:
             raise RuntimeError(f"{self.name}: no tickers returned for {quote_asset}")
 

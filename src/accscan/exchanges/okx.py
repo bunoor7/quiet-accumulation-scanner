@@ -25,8 +25,8 @@ BASE_URL = "https://www.okx.com"
 _INTERVAL_MAP = {
     "1h": "1H",
     "4h": "4H",
-    "1D": "1D",
-    "1W": "1W",
+    "1D": "1Dutc",  # UTC-aligned daily bars, same boundaries as Binance
+    "1W": "1Wutc",
 }
 
 
@@ -117,9 +117,17 @@ class OKXClient(ExchangeClient):
                 "vol", "volCcy", "volCcyQuote", "confirm",
             ],
         )
+        # confirm == "0" marks the still-forming candle. Decisions run on
+        # closed bars only, same as the Binance adapter.
+        df = df[df["confirm"].astype(str) == "1"]
+        if df.empty:
+            raise RuntimeError(f"okx: no closed candles for {symbol} {interval}")
         df["close_time"] = pd.to_datetime(df["ts"].astype("int64"), unit="ms", utc=True)
-        for col in ("open", "high", "low", "close", "volCcy"):
+        # For SPOT, "vol" is in base currency (same unit as Binance's
+        # kline volume); "volCcy" is quote currency. Use base so OBV is
+        # comparable across both exchanges.
+        for col in ("open", "high", "low", "close", "vol"):
             df[col] = df[col].astype(float)
-        df = df.rename(columns={"volCcy": "volume"})
+        df = df.rename(columns={"vol": "volume"})
         df = df.set_index("close_time")[["open", "high", "low", "close", "volume"]]
         return df
