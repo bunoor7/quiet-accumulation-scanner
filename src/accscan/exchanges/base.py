@@ -83,9 +83,7 @@ class ExchangeClient(ABC):
         if total_volume <= 0:
             raise RuntimeError(f"{self.name}: zero aggregate volume, cannot compute snapshot")
 
-        weighted_change = sum(
-            t.price_change_pct_24h * t.quote_volume_24h for t in tickers
-        ) / total_volume
+        weighted_change = _volume_weighted_median(tickers, total_volume)
 
         btc = next((t for t in tickers if t.base_asset == "BTC"), None)
         btc_dominance_pct = (
@@ -100,6 +98,25 @@ class ExchangeClient(ABC):
             volume_weighted_change_pct_24h=weighted_change,
             btc_quote_volume_share_pct=btc_dominance_pct,
         )
+
+
+def _volume_weighted_median(tickers: List[Ticker24h], total_volume: float) -> float:
+    """24h change of the pair sitting at the 50% mark of cumulative volume.
+
+    A volume-weighted *mean* let one or two heavily traded pairs with an
+    extreme move drag the whole market reading (observed live: +5.2% while
+    the market was down 2.6%), flipping the regime to SHARP_TREND and
+    tightening the RSI band for every candidate. The weighted median still
+    lets liquid pairs count for more but ignores how extreme an outlier is.
+    """
+    ordered = sorted(tickers, key=lambda t: t.price_change_pct_24h)
+    half = total_volume / 2.0
+    cumulative = 0.0
+    for t in ordered:
+        cumulative += t.quote_volume_24h
+        if cumulative >= half:
+            return t.price_change_pct_24h
+    return ordered[-1].price_change_pct_24h
 
 
 @dataclass(frozen=True)

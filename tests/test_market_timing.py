@@ -108,3 +108,18 @@ def test_config_only_accepts_usdt_quote():
     assert ScreenConfig(quote_asset="usdt").quote_asset == "USDT"
     with pytest.raises(ValueError):
         ScreenConfig(quote_asset="USDC")
+
+
+def test_one_pumping_high_volume_pair_does_not_fake_a_sharp_market():
+    # Majors flat-to-down, one pair +80% on big volume. The old weighted
+    # mean read ~+15% (SHARP_TREND); the weighted median stays near flat.
+    cfg = ScreenConfig()
+    client = _FakeClient([
+        _ticker("BTCUSDT", "BTC", change_pct=-0.9, volume=1_000_000_000.0),
+        _ticker("ETHUSDT", "ETH", change_pct=0.2, volume=600_000_000.0),
+        _ticker("SOLUSDT", "SOL", change_pct=-1.2, volume=300_000_000.0),
+        _ticker("PUMPUSDT", "PUMP", change_pct=80.0, volume=400_000_000.0),
+    ])
+    result = assess_market_timing(client, cfg)
+    assert result.regime is not MarketRegime.SHARP_TREND
+    assert abs(result.snapshot.volume_weighted_change_pct_24h) < 1.0

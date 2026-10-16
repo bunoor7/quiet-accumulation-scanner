@@ -145,10 +145,10 @@ def test_binance_market_wide_snapshot_is_volume_weighted(monkeypatch):
     snap = client.get_market_wide_snapshot(quote_asset="USDT")
 
     total = 900_000_000.0 + 36_000_000.0
-    expected_change = (1.5 * 900_000_000.0 + (-0.8) * 36_000_000.0) / total
     assert snap.exchange == "binance"
     assert snap.pair_count == 2
-    assert snap.volume_weighted_change_pct_24h == pytest.approx(expected_change)
+    # BTC holds >50% of volume, so the volume-weighted median is BTC's move.
+    assert snap.volume_weighted_change_pct_24h == pytest.approx(1.5)
     assert snap.btc_quote_volume_share_pct == pytest.approx(900_000_000.0 / total * 100.0)
 
 
@@ -304,6 +304,4 @@ def test_market_wide_snapshot_excludes_stablecoin_pairs(monkeypatch):
     snap = BinanceClient().get_market_wide_snapshot("USDT", exclude_bases=["USDC"])
     total = 900_000_000.0 + 36_000_000.0
     assert snap.pair_count == 2
-    assert snap.volume_weighted_change_pct_24h == pytest.approx(
-        (1.5 * 900_000_000.0 + (-0.8) * 36_000_000.0) / total
-    )
+    assert snap.volume_weighted_change_pct_24h == pytest.approx(1.5)
