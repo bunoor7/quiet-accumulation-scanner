@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .config import ScreenConfig
 from .exchanges import get_exchange_client
 from .market_cap import CoinGeckoMarketCapProvider, NullMarketCapProvider
-from .market_timing import assess_market_timing
+from .market_timing import MarketRegime, assess_market_timing
 from .multi_timeframe import confirm_candidates, surviving
 from .report import format_no_signal, format_signal_report
 from .screener import build_universe, score_candidates, shortlist_accumulation_candidates
@@ -46,6 +47,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--telegram-test", action="store_true",
         help="Send one test message to Telegram and exit, to verify the setup.",
+    )
+    p.add_argument(
+        "--owner-status", action="store_true",
+        help="Also send a short status of this run (signal or not, and why) to "
+             "the owner's private chat (needs TELEGRAM_OWNER_CHAT_ID).",
     )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -90,13 +96,66 @@ def run(argv=None) -> int:
         retries=cfg.http_retries,
         retry_wait_s=cfg.http_retry_wait_s,
     )
+    notes: list = []
+    text, is_signal, code = _scan(args, cfg, client, log, notes)
+    if is_signal:
+        code = _emit(text, True, args)
+    else:
+        print(text)
+    if args.owner_status:
+        _send_owner_status(text, is_signal, code, notes)
+    return code
+
+
+def _send_owner_status(text, is_signal, code, notes) -> None:
+    owner = os.environ.get("TELEGRAM_OWNER_CHAT_ID", "").strip()
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not owner or not token:
+        print("تعذر إرسال الحالة اليومية، TELEGRAM_OWNER_CHAT_ID غير مضبوط", file=sys.stderr)
+        return
+    if code == 1:
+        head = "⚠️ الماسح لم يستطع قراءة بيانات السوق في هذا التشغيل"
+    elif is_signal:
+        head = "🔔 الماسح وجد إشارة ونشرها في القناة"
+    else:
+        head = "✅ الماسح يعمل، ولا توجد إشارة في هذا التشغيل"
+    lines = [head, ""] + [f"• {n}" for n in notes] + ["", text if not is_signal else ""]
+    try:
+        telegram.send_message("\n".join(lines).strip(), token=token, chat_id=owner)
+    except telegram.TelegramSendError as exc:
+        print(f"تعذر إرسال الحالة اليومية ({exc})", file=sys.stderr)
+
+
+_REGIME_SHORT = {
+    MarketRegime.SHARP_TREND: "حركة حادة",
+    MarketRegime.ACTIVE_RANGE: "نشاط معتدل",
+    MarketRegime.QUIET: "هدوء نسبي",
+}
+
+
+def _exclusion_ar(reason: str) -> str:
+    if reason.startswith("already_extended"):
+        return "ارتفعت كثيرا فوق متوسطها اليومي الطويل وفاتتها مرحلة التراكم"
+    if reason.startswith("market_beta"):
+        return "حركتها مجرد انعكاس لحركة السوق العامة"
+    if reason.startswith("insufficient_history"):
+        return "تاريخ أسعارها قصير"
+    return "تعذر جلب بياناتها"
+
+
+def _scan(args, cfg, client, log, notes):
+    """Run steps 1-7. Returns (text, is_signal, exit_code); appends Arabic
+    one-liners describing each stage to ``notes`` for the owner status."""
 
     # Step 1
     try:
         market_timing = assess_market_timing(client, cfg)
     except Exception as exc:  # noqa: BLE001
-        print(format_no_signal(f"تعذر الوصول إلى بيانات السوق الإجمالية من {args.exchange} ({exc})"))
-        return 1
+        return format_no_signal(f"تعذر الوصول إلى بيانات السوق الإجمالية من {args.exchange} ({exc})"), False, 1
+    notes.append(
+        f"حالة السوق {_REGIME_SHORT.get(market_timing.regime, market_timing.regime)}، "
+        f"والحركة خلال 24 ساعة {market_timing.snapshot.volume_weighted_change_pct_24h:+.2f}%"
+    )
     log.info(
         "market timing: regime=%s weighted_change=%.2f%% btc_share=%.1f%%",
         market_timing.regime, market_timing.snapshot.volume_weighted_change_pct_24h,
@@ -106,19 +165,18 @@ def run(argv=None) -> int:
     # Step 2
     universe = build_universe(client, cfg)
     if len(universe) < cfg.shortlist_min:
-        print(format_no_signal("عدد العملات المستوفية لشرط السيولة الأساسي غير كاف لهذا التشغيل"))
-        return 0
+        return format_no_signal("عدد العملات المستوفية لشرط السيولة الأساسي غير كاف لهذا التشغيل"), False, 0
 
     market_cap_provider = (
         CoinGeckoMarketCapProvider() if args.market_cap == "coingecko" else NullMarketCapProvider()
     )
     scored = score_candidates(client, universe, cfg, market_cap_provider=market_cap_provider)
     shortlist = shortlist_accumulation_candidates(scored, cfg, strict_mode=market_timing.strict_mode)
+    notes.append(f"العملات المرشحة بعد فلتر RSI والأداء الشهري {len(shortlist)}")
     log.info("shortlist: %d candidates after RSI/performance filter", len(shortlist))
 
     if len(shortlist) < 1:
-        print(format_no_signal("غياب انضغاط حقيقي، لا توجد عملة تجمع بين RSI محايد وأداء شهري شبه مسطح"))
-        return 0
+        return format_no_signal("غياب انضغاط حقيقي، لا توجد عملة تجمع بين RSI محايد وأداء شهري شبه مسطح"), False, 0
 
     # Step 3
     confirmed = confirm_candidates(client, shortlist, market_timing, cfg)
@@ -127,22 +185,22 @@ def run(argv=None) -> int:
     for c in confirmed:
         if not c.survived:
             log.info("excluded %s: %s", c.candidate.symbol, c.excluded_reason)
+            notes.append(f"استُبعدت {c.candidate.base_asset} لأنها {_exclusion_ar(c.excluded_reason)}")
 
     if not survivors:
-        print(format_no_signal("كل المرشحين إما ممتد فعلا على الأطر الأعلى أو حركته مجرد انعكاس لحركة السوق العامة"))
-        return 0
+        return format_no_signal("كل المرشحين إما ممتد فعلا على الأطر الأعلى أو حركته مجرد انعكاس لحركة السوق العامة"), False, 0
 
     # Step 4 + 5 (evaluate_candidate reads the already-fetched 4h/1h/1D frames)
     verdicts = [evaluate_candidate(c, cfg, decision_timeframe=args.decision_timeframe) for c in survivors]
     for v in verdicts:
         if not v.is_signal:
             log.info("no signal for %s: %s", v.confirmed.candidate.symbol, v.reject_reason)
+            notes.append(f"{v.confirmed.candidate.base_asset} رُفضت، {v.reject_reason}")
 
     # Step 7 (honesty gate)
     ranked = rank_signals(verdicts)
     if not ranked:
-        print(format_no_signal("لا توجد عملة تجمع بين تراكم هادئ حقيقي وزناد مبكر موثوق في هذا التشغيل"))
-        return 0
+        return format_no_signal("لا توجد عملة تجمع بين تراكم هادئ حقيقي وزناد مبكر موثوق في هذا التشغيل"), False, 0
 
     # Step 6: walk the signals strongest-first and report the first one
     # that also yields a tradeable plan (sane stop, enough reward:risk).
@@ -161,10 +219,9 @@ def run(argv=None) -> int:
         log.info("signal %s dropped at trade plan: %s", verdict.confirmed.candidate.symbol, reason)
 
     if best is None:
-        print(format_no_signal(f"ظهرت إشارة فنية لكن لا توجد صفقة مجدية، {plan_reason}"))
-        return 0
+        return format_no_signal(f"ظهرت إشارة فنية لكن لا توجد صفقة مجدية، {plan_reason}"), False, 0
 
-    return _emit(format_signal_report(args.exchange, market_timing, best, trade_plan), True, args)
+    return format_signal_report(args.exchange, market_timing, best, trade_plan), True, 0
 
 
 if __name__ == "__main__":

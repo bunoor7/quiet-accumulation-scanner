@@ -76,3 +76,34 @@ def test_emit_posts_only_real_signals(monkeypatch):
     assert sent == []
     cli._emit("تقرير الإشارة", is_signal=True, args=args)
     assert len(sent) == 1 and "تقرير الإشارة" in sent[0]
+
+
+def test_owner_status_reports_no_signal_reasons(monkeypatch):
+    sent = []
+    monkeypatch.setenv("TELEGRAM_OWNER_CHAT_ID", "12345")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(telegram, "send_message",
+                        lambda text, token=None, chat_id=None: sent.append((chat_id, text)))
+    cli._send_owner_status("لا توجد إشارة تراكم مؤهلة", False, 0,
+                           ["حالة السوق نشاط معتدل", "TRX رُفضت، RSI مرتفع"])
+    assert len(sent) == 1
+    chat, text = sent[0]
+    assert chat == "12345"
+    assert "يعمل" in text and "TRX" in text and "لا توجد إشارة" in text
+
+
+def test_owner_status_flags_data_failure(monkeypatch):
+    sent = []
+    monkeypatch.setenv("TELEGRAM_OWNER_CHAT_ID", "12345")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(telegram, "send_message",
+                        lambda text, token=None, chat_id=None: sent.append(text))
+    cli._send_owner_status("تعذر الوصول", False, 1, [])
+    assert "لم يستطع" in sent[0]
+
+
+def test_owner_status_skipped_without_owner_chat(monkeypatch, capsys):
+    monkeypatch.delenv("TELEGRAM_OWNER_CHAT_ID", raising=False)
+    monkeypatch.setattr(telegram, "send_message", lambda *a, **k: pytest.fail("must not send"))
+    cli._send_owner_status("x", False, 0, [])
+    assert "TELEGRAM_OWNER_CHAT_ID" in capsys.readouterr().err

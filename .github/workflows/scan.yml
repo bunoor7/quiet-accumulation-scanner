@@ -3,13 +3,21 @@ name: Scan and notify Telegram
 # Every 4 hours, a few minutes after each 4h candle closes (00, 04, 08,
 # 12, 16, 20 UTC = 03, 07, 11, 15, 19, 23 Bahrain time). Only a real
 # signal is posted to Telegram; a no-signal run stays silent there.
+# An extra daily run at 09:07 UTC (12:07 Bahrain) also sends a private
+# status to the owner (TELEGRAM_OWNER_CHAT_ID): working or not, and why
+# there is no signal. That run still posts a real signal to the channel.
 on:
   schedule:
     - cron: "7 0,4,8,12,16,20 * * *"
+    - cron: "7 9 * * *"
   workflow_dispatch:
     inputs:
       test_message:
         description: "Send a test message to Telegram instead of scanning"
+        type: boolean
+        default: false
+      owner_status:
+        description: "Also send the private status message to the owner"
         type: boolean
         default: false
 
@@ -20,6 +28,8 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+      OWNER_STATUS: ${{ (github.event.schedule == '7 9 * * *' || inputs.owner_status) && '--owner-status' || '' }}
       # api.binance.com refuses US-hosted runners; this is Binance's own
       # public market-data mirror with the same endpoints.
       BINANCE_BASE_URL: https://data-api.binance.vision
@@ -35,4 +45,4 @@ jobs:
         run: python -m accscan.cli --telegram-test
       - name: Scan Binance and post any signal
         if: ${{ !inputs.test_message }}
-        run: python -m accscan.cli --exchange binance --telegram -v
+        run: python -m accscan.cli --exchange binance --telegram $OWNER_STATUS -v
